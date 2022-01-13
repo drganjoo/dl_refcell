@@ -35,6 +35,8 @@ impl std::fmt::Display for ListError {
     }
 }
 
+//type Link<T> = Rc<RefCell<Option<Node<T>>>>;
+
 ////////////////////////////////////////////////
 //  Node
 ////////////////////////////////////////////////
@@ -70,17 +72,85 @@ impl<T> Drop for Node<T>
     }
 }
 
-macro_rules! get_node_data {
+// macro_rules! get_node_data {
+//     ($node:ident, $value:ident) => {
+//         let node_ref = $node.borrow();
+//         // the node cannot be None as the only way that is possible would be for 
+//         // the root node to be None and that has already been checked in the start
+//         // of this function
+//         let node_some = node_ref.as_ref().expect("Internal List issue, a 'None' node cannot be in the list");
+//         let $value = &node_some.data;
+//     };
+// }
+
+macro_rules! get_node_from_link {
     ($node:ident, $value:ident) => {
         let node_ref = $node.borrow();
         // the node cannot be None as the only way that is possible would be for 
         // the root node to be None and that has already been checked in the start
         // of this function
         let node_some = node_ref.as_ref().expect("Internal List issue, a 'None' node cannot be in the list");
-        let $value = &node_some.data;
+        let $value = &node_some;
     };
 }
 
+macro_rules! get_link_node_mut {
+    ($node:ident, $value:ident) => {
+        let mut node_ref = $node.borrow_mut();
+        // the node cannot be None as the only way that is possible would be for 
+        // the root node to be None and that has already been checked in the start
+        // of this function
+        let $value = node_ref.as_mut().expect("Internal List issue, a 'None' node cannot be in the list");
+    };
+}
+
+macro_rules! get_node_mut {
+    ($node:expr, $node_some:ident) => {
+        let mut node_ref = $node.borrow_mut();
+        let $node_some = node_ref.as_mut().expect("List implementation error, node is None");
+    }
+}
+
+macro_rules! get_prev_strong_clone {
+    ($node:expr, $strong_clone:ident) => {
+        let $strong_clone = {
+            let node_ref = $node.borrow();
+            let node_some = node_ref.as_ref().expect("Head Node cannot be None as we have already tested this");
+            let strong = node_some.prev_node.upgrade().expect("List implementation error. Head's prev cannot be None");
+            Rc::clone(&strong)
+        };
+    }
+}
+
+macro_rules! visit_each_node {
+    ($start: expr, $current: ident, $f : block) => {
+        {
+            let any_nodes = $start.borrow().is_some();
+
+            if any_nodes {
+                let mut $current = Rc::clone(&$start);
+                
+                loop {
+                    // get the next node in the list and while the internal
+                    // structures are accessed, call F on the value as well
+                    let next = {
+                        $f
+                        
+                        get_node_from_link!($current, node_some);
+                        Rc::clone(&node_some.next_node)
+                    };
+
+                    $current = next;
+
+                    // in case we have come back to the root node, we need to end the loop
+                    if Rc::ptr_eq(&$current, &$start) {
+                        break;
+                    }
+                }
+            }
+        }
+    };
+}
 // returns a cloned RC from a Weak
 // a rc::Weak cannot be cloned unless it is first made into a strong 
 // smart pointer
@@ -129,73 +199,12 @@ impl<T> DoubleList<T>
     pub fn iterate<F>(&self, f : &F)
         where F : Fn(&T) -> bool
     {
-        if self.is_empty() {
-            return;
-        }
-
-        let mut current = Rc::clone(&self.head);
-        
-        loop {
-            // get the next node in the list and while the internal
-            // structures are accessed, call F on the value as well
-            let next = {
-                let node_option = &*current.borrow();
-                // the node cannot be None as the only way that is possible would be for 
-                // the root node to be None and that has already been checked in the start
-                // of this function
-                let node_some = node_option.as_ref().expect("Internal List issue, a 'None' node cannot be in the list");
-                let value = &node_some.data;
-
-                if !f(&value) {
-                    break;
-                }
-
-                // clone the next strong link and save that for next call
-                Rc::clone(&node_some.next_node)
-            };
-
-            current = next;
-
-            // in case we have come back to the root node, we need to end the loop
-            if &*current as *const _ == &*self.head as *const _ {
+        visit_each_node!(&self.head, link, {
+            get_node_from_link!(link, node);
+            if !f(&node.data) {
                 break;
             }
-        }
-    }
-
-    fn visit_each_node<F>(&self, f : &F) 
-        where F : Fn(&Link<T>) -> bool
-    {
-        if self.is_empty() {
-            return;
-        }
-
-        let mut current = Rc::clone(&self.head);
-        
-        loop {
-            // get the next node in the list and while the internal
-            // structures are accessed, call F on the value as well
-            let next = {
-                if !f(&current) {
-                    break;
-                }
-
-                let node_option = &*current.borrow();
-                // the node cannot be None as the only way that is possible would be for 
-                // the root node to be None and that has already been checked in the start
-                // of this function
-                let node_some = node_option.as_ref().expect("Internal List issue, a 'None' node cannot be in the list");
-                // clone the next strong link and save that for next call
-                Rc::clone(&node_some.next_node)
-            };
-
-            current = next;
-
-            // in case we have come back to the root node, we need to end the loop
-            if &*current as *const _ == &*self.head as *const _ {
-                break;
-            }
-        }
+        });
     }
 
     /// Iterate over the list using prev links. The passed in function is called
@@ -239,7 +248,7 @@ impl<T> DoubleList<T>
             current = prev;
 
             // in case we have come back to the root node, we need to end the loop
-            if &*current as *const _ == &*end_marker as *const _ {
+            if Rc::ptr_eq(&current, &end_marker) {
                 break;
             }
         }
@@ -294,7 +303,7 @@ impl<T> DoubleList<T>
                 // when there is only one root node then the tail and head are same
                 // and we already have a mutable reference to the head so we cannot
                 // take another mutable reference to the tail in that case.
-                if &*tail_strong as *const _ == &*self.head as *const _ {
+                if Rc::ptr_eq(&tail_strong, &self.head) {
                     head_node.next_node = Rc::clone(&new_head);
                 }
                 else {
@@ -330,12 +339,7 @@ impl<T> DoubleList<T>
         // borrow a reference to the head and then get to the tail as when
         // will call borrow_mut on tail it will panic. So take a limited
         // borrow and clone the tail link into a strong RC
-        let tail = {
-            let head_ref = &self.head.borrow();
-            let head_some = head_ref.as_ref().expect("Head Node cannot be None as we have already tested this");
-            let tail_strong = head_some.prev_node.upgrade().expect("List implementation error. Head's prev cannot be None");
-            Rc::clone(&tail_strong)
-        };
+        get_prev_strong_clone!(self.head, tail);
 
         // the following operations have to be carried out
         // new->prev = tail
@@ -348,108 +352,102 @@ impl<T> DoubleList<T>
         let new_node_rc = Rc::new(RefCell::new(Some(new_node)));
 
         // tail->next = new node
-        let mut tail_ref = tail.borrow_mut();
-        let tail_some = &mut tail_ref.as_mut().expect("List implementation error, tail cannot be None");
-
-        tail_some.next_node = Rc::clone(&new_node_rc);
+        {
+            get_node_mut!(tail, tail_some);
+            tail_some.next_node = Rc::clone(&new_node_rc);
+        }
 
         // head->prev = new node
-        let mut head_ref = self.head.borrow_mut();
-        let head_some = &mut head_ref.as_mut().expect("List implementation error, tail cannot be None");
-
+        get_node_mut!(self.head, head_some);
         head_some.prev_node = Rc::downgrade(&new_node_rc);
     }
 
     pub fn delete(&mut self, value : &T) -> Result<(), ListError> {
-        if self.is_empty() {
+        let mut found = false;
+        
+        visit_each_node!(&self.head, link, {
+            let should_delete = {
+                get_node_from_link!(link, node);
+                node.data == *value
+            };
+
+            if should_delete {
+                self.delete_link(&link);
+                found = true;
+                break;
+            }
+        });
+
+        if !found {
             return Err(ListError::NodeNotFound);
         }
 
-        let mut current = Rc::clone(&self.head);
-        let end_marker = Rc::clone(&self.head);
+        Ok(())
+    }
 
-        let mut found = false;
-        let mut is_single = false;
+    fn delete_link(&mut self, delete_link : &Link<T>) {
+        let is_only_head = {
+            get_node_from_link!(delete_link, node);
+            
+            Rc::ptr_eq(&delete_link, &self.head) 
+            &&  Rc::ptr_eq(&node.next_node, &self.head)
+        };
 
-        loop {
+        if is_only_head {
+            let mut head = self.head.borrow_mut();
+            // break the next link of the only head node
+            let head_some = head.as_mut().expect("List implementation error. Head has None");
+            head_some.next_node = Rc::new(RefCell::new(None));
+
+            // set head to point to None
+            *head = None;
+        }
+        else {
+            // prev->next = current->next
+            // current->next->prev = current->prev
+
+            // break link to current->next node while keeping mutable borrow
+            // to the smallest possible block.
             let next = {
-                let current_ref = current.borrow();
-                let current_some = current_ref.as_ref().expect("List implementation error. Head is None after checking is_empty");
-                if current_some.data == *value {
-                    found = true;
-                    is_single = &current_some.next_node.borrow() as *const _ == &current_ref as *const _;
-                    break;
-                }
+                get_link_node_mut!(delete_link, current_some);
 
-                if &*current as *const _ == &*end_marker as *const _ {
-                    // we've come back to the end_marker
-                    break;
-                }
+                // keep a pointer on next before it gets dropped due to our link break
+                let next = Rc::clone(&current_some.next_node);
+                current_some.next_node = Rc::new(RefCell::new(None));
 
-                Rc::clone(&current_some.next_node)
+                next
             };
 
-            current = next;
-        }
+            // set prev->next = current->next
+            // careful the prev could be next in a 2 node double list, so we keep
+            // mutable borrows to the shortest possible block
+            let prev = {
+                get_prev_strong_clone!(delete_link, prev_strong);
+                get_link_node_mut!(prev_strong, prev_node);
 
-        if found {
-            // in case of sinle node just set head to None
-            let is_head = &*current as *const _ == &*self.head as *const _;
+                prev_node.next_node = Rc::clone(&next);
 
-            if is_single {
-                let mut head = self.head.borrow_mut();
-                {
-                    let head_some = head.as_ref().expect("List implementation error. Head has None");
+                Rc::downgrade(&prev_strong)
+            };
 
-                    // break the next link of the only head node
-                    let mut next_ref = head_some.next_node.borrow_mut();
-                    *next_ref = None;
-                }
-
-                // set head to point to None
-                *head = None;
-            }
-            else {
-                // node found and needs to be deleted
-                // prev->next = current->next
-                // current->next = current->prev
-                let mut current_ref = current.borrow_mut();
-                let current_some = current_ref.as_mut().expect("List implementation error. Current has no node");
-
-                let next = Rc::clone(&current_some.next_node);
-
-                // break the next link of the current->next
-                current_some.next_node = Rc::new(RefCell::new(None));
-            
-                // prev->next = current->next
-                let prev = &current_some.prev_node;
-                let prev_strong = prev.upgrade().expect("List implementation error. Prev is dangling");
-
-                let mut prev_ref = prev_strong.borrow_mut();
-                let prev_some = prev_ref.as_mut().expect("List implementation error. Prev is None");
-                prev_some.next_node = Rc::clone(&next);
-
-                // current->next = current->prev
-                let mut next_ref = next.borrow_mut();
-                let next_some = next_ref.as_mut().expect("List implementation error. Next is None");
-                next_some.prev_node = Rc::downgrade(&prev_strong);
-
-                if is_head {
-                    self.head = Rc::clone(&next);
-                }
+            // set current->next->prev = current->prev
+            {
+                get_link_node_mut!(next, next_node);
+                next_node.prev_node = prev;
             }
 
-            return Ok(())
+            // change head if that is the node we just deleted
+            let is_head = Rc::ptr_eq(&delete_link, &self.head);
+            if is_head {
+                self.head = Rc::clone(&next);
+            }
         }
-
-        Err(ListError::NodeNotFound)
     }
 
     pub fn print_counts(&self) {
-        self.visit_each_node(&|node : &Link<T>| {
-            get_node_data!(node, value);
-            println!("{}, Strong: {}, Weak: {}", value, Rc::strong_count(&node), Rc::weak_count(&node));
-            return true;
+        visit_each_node!(&self.head, link, {
+            get_node_from_link!(link, node);
+            println!("{}, Strong: {}, Weak: {}", node.data, Rc::strong_count(&link), Rc::weak_count(&link));
         });
     }
 }
@@ -463,11 +461,6 @@ impl<T> Drop for DoubleList<T>
     where T : fmt::Display
 {
     fn drop(&mut self) { 
-        // nothing to do in case of empty list
-        if self.head.borrow().is_none() {
-            return;
-        }
-
         // the tail is maintaing a strong reference to the head, 
         // that needs to be removed
         if let Some(ref mut head_node) = &mut *self.head.borrow_mut() {
@@ -484,8 +477,9 @@ impl<T> Drop for DoubleList<T>
 fn check() {
     let mut d = DoubleList::<i32>::new();
     d.insert_front(32);
-    d.print_counts();
+    d.delete(&32).ok();
 
+    d.insert_front(32);
     d.insert_front(3);
     d.insert_back(13);
 
@@ -500,6 +494,25 @@ fn check() {
     d.print_counts();
     d.delete(&3).ok();
     d.print_counts();
+    d.delete(&32).ok();
+    d.delete(&13).ok();
+    d.delete(&3).err();
+
+    d.print_counts();
+    
+    d.insert_back(100);
+    d.insert_back(200);
+    d.insert_back(300);
+    d.insert_back(400);
+    d.insert_back(500);
+
+    d.iterate(&|value : &i32| -> bool {
+        println!("{}", value);
+        return true;
+    });
+
+    d.delete(&300).ok();
+
 
     d.iterate_rev(&|value : &i32| -> bool {
         println!("{}", value);
