@@ -47,7 +47,7 @@ impl std::fmt::Display for ListError {
 /// A node represents a node in the double linked list. For a single
 /// node both next and prev would point back to the same node
 struct Node<T> 
-    where T : fmt::Display      // this is just for testing purposes as we print in drop
+    where T : fmt::Display + PartialEq      // this is just for testing purposes as we print in drop
 {
     data : T,
     next_node : Link<T>,
@@ -55,7 +55,7 @@ struct Node<T>
 }
 
 impl<T> Node<T> 
-    where T : fmt::Display      // this is just for testing purposes as we print in drop
+    where T : fmt::Display + PartialEq      // this is just for testing purposes as we print in drop
 {
     fn new(with_data : T) -> Self {
         // by default the next and prev are set to None
@@ -71,7 +71,7 @@ impl<T> Node<T>
 /// to ensure that all nodes eventually get dropped
 #[cfg(debug_assertions)]
 impl<T> Drop for Node<T> 
-    where T : fmt::Display
+    where T : fmt::Display + PartialEq
 {
     fn drop(&mut self) { 
         // let go of the strong link that node maintains to the next
@@ -95,9 +95,17 @@ fn clone_weak_or_panic<L>(node : &Weak<L>) -> Weak<L> {
 /// Again, this has been done to check how more challenging it is otherwise
 /// keeping an empty node would make it so much more easier to code
 pub struct DoubleList<T> 
-    where T : fmt::Display
+    where T : fmt::Display + PartialEq
 {
     head : Link<T>
+}
+
+impl <T> Default for DoubleList<T> 
+    where T : fmt::Display + PartialEq
+{
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T> DoubleList<T> 
@@ -317,7 +325,7 @@ impl<T> DoubleList<T>
         let is_only_head = {
             get_node_from_link!(delete_link, node);
             
-            Rc::ptr_eq(&delete_link, &self.head) 
+            Rc::ptr_eq(delete_link, &self.head) 
             &&  Rc::ptr_eq(&node.next_node, &self.head)
         };
 
@@ -369,7 +377,7 @@ impl<T> DoubleList<T>
             }
 
             // change head if that is the node we just deleted
-            let is_head = Rc::ptr_eq(&delete_link, &self.head);
+            let is_head = Rc::ptr_eq(delete_link, &self.head);
             if is_head {
                 self.head = Rc::clone(&next);
             }
@@ -393,7 +401,7 @@ impl<T> DoubleList<T>
 /// Drop of DoubleList has to remove tail's strong link. The head 
 /// will be dropped by Rust's allocator
 impl<T> Drop for DoubleList<T> 
-    where T : fmt::Display
+    where T : fmt::Display + PartialEq
 {
     fn drop(&mut self) { 
         // the tail is maintaing a strong reference to the head, 
@@ -403,7 +411,7 @@ impl<T> Drop for DoubleList<T>
             let tail_strong = &tail.upgrade().expect("Tail cannot be None. Something went wrong");
 
             // in case the tail node is different from the head node
-            if !Rc::ptr_eq(&tail_strong, &self.head) {
+            if !Rc::ptr_eq(tail_strong, &self.head) {
                 let mut tail_node_ref = tail_strong.borrow_mut();
                 let tail_node_some = tail_node_ref.as_mut().expect("Tail node can never be None. Check links");
                 tail_node_some.next_node = Rc::new(RefCell::new(None));

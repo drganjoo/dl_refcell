@@ -13,7 +13,7 @@ fn check() {
 
     d.iterate(&|value : &i32| -> bool {
         println!("{}", value);
-        return true;
+        true
     });
 
     println!("calling reverse:");
@@ -34,14 +34,14 @@ fn check() {
 
     d.iterate(&|value : &i32| -> bool {
         println!("{}", value);
-        return true;
+        true
     });
 
     d.delete(&300).ok();
 
     d.iterate_rev(&|value : &i32| -> bool {
         println!("{}", value);
-        return true;
+        true
     });
 }
 
